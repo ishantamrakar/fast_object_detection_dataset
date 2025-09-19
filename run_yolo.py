@@ -39,4 +39,3 @@ if __name__ == "__main__":
     video_file = "/Users/itamrakar/Documents/Projects/fast_dataset/data/IMG_3550.MOV"
     inspector = YOLOVideoInspector(model_path="yolov8n.pt", video_path=video_file)
     inspector.run()
-    
