@@ -6,15 +6,18 @@ import torch
 import matplotlib.pyplot as plt
 import cv2
 from sam2.sam2_video_predictor import SAM2VideoPredictor
+import shutil
+import random
+import yaml
 
 
 class SAM2VideoRunner:
     def __init__(self, frames_folder, model_id="facebook/sam2-hiera-large", device="cpu"):
         self.frames_folder = frames_folder
         
-        # split folder name with "_" and take the first part as base name
         self.save_dir = os.path.basename(frames_folder).split("_f")[0] + "_masks"
-        
+        self.dataset_dir = os.path.join(os.path.dirname(frames_folder), "yolov8_dataset")
+
         if torch.cuda.is_available():
             self.device = torch.device("cuda")
         else:
@@ -42,6 +45,7 @@ class SAM2VideoRunner:
         self.vis_frame_stride = 30
         self.annotated_frame = None 
         self.video_segments = {}
+
         
         self.frame_names = [
             p for p in os.listdir(frames_folder)
@@ -210,7 +214,7 @@ class SAM2VideoRunner:
         cv2.destroyAllWindows()
         
     # creates bounding boxes for each object in the mask 
-    def create_bounding_boxes(self, save=False):
+    def create_bounding_boxes(self, visualize=False):
         boxes = {}
         
         for out_frame_idx in self.video_segments:
@@ -219,6 +223,7 @@ class SAM2VideoRunner:
             frame = cv2.imread(frame_path)
             if frame is None:
                 continue
+
             for obj_id, mask in masks.items():
                 # Squeeze mask to 2D if needed
                 if mask.ndim == 4 and mask.shape[0] == 1 and mask.shape[1] == 1:
@@ -238,18 +243,124 @@ class SAM2VideoRunner:
                 x_min, x_max = xs.min(), xs.max()
                 y_min, y_max = ys.min(), ys.max()
                 boxes[(obj_id, out_frame_idx)] = (x_min, y_min, x_max, y_max)
-                # visualize the box on the frame with consistent color
-                cmap = plt.get_cmap("tab10")
-                cmap_idx = obj_id if obj_id is not None else 0
-                color_float = cmap(cmap_idx)[:3]
-                color = tuple(int(255 * c) for c in color_float)
-                cv2.rectangle(frame, (x_min, y_min), (x_max, y_max), color, 2)
-                cv2.putText(frame, f"obj {obj_id}", (x_min, y_min - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-            cv2.imshow("Bounding Box", frame)
-            cv2.waitKey(100)
+                
+                if visualize:
+                    # visualize the box on the frame with consistent color
+                    cmap = plt.get_cmap("tab10")
+                    cmap_idx = obj_id if obj_id is not None else 0
+                    color_float = cmap(cmap_idx)[:3]
+                    color = tuple(int(255 * c) for c in color_float)
+                    cv2.rectangle(frame, (x_min, y_min), (x_max, y_max), color, 2)
+                    cv2.putText(frame, f"obj {obj_id}", (x_min, y_min - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+            if visualize:
+                cv2.imshow("Bounding Box", frame)
+                cv2.waitKey(100)
         cv2.destroyAllWindows()
         return boxes
-    
+
+    def export_yolov8_dataset(self, train_ratio=0.8, write_data_yaml=True):
+        root_dir = self.dataset_dir
+        images_train_dir = os.path.join(root_dir, "images", "train")
+        images_val_dir = os.path.join(root_dir, "images", "val")
+        labels_train_dir = os.path.join(root_dir, "labels", "train")
+        labels_val_dir = os.path.join(root_dir, "labels", "val")
+
+        os.makedirs(images_train_dir, exist_ok=True)
+        os.makedirs(images_val_dir, exist_ok=True)
+        os.makedirs(labels_train_dir, exist_ok=True)
+        os.makedirs(labels_val_dir, exist_ok=True)
+
+        # Map object names to class ids (0-based)
+        sorted_labels = sorted(self.labels.items(), key=lambda x: x[1])
+        class_name_to_id = {name: idx for idx, (name, _) in enumerate(sorted_labels)}
+
+        # Get bounding boxes
+        boxes = self.create_bounding_boxes(visualize=False)
+
+        # Prepare list of frames with bounding boxes
+        frames_with_boxes = set()
+        for (obj_id, frame_idx) in boxes.keys():
+            frames_with_boxes.add(frame_idx)
+
+        frame_indices = sorted(list(frames_with_boxes))
+        num_train = int(len(frame_indices) * train_ratio)
+        train_indices = set(frame_indices[:num_train])
+        val_indices = set(frame_indices[num_train:])
+
+        for frame_idx in frame_indices:
+            frame_name = self.frame_names[frame_idx]
+            frame_path = os.path.join(self.frames_folder, frame_name)
+            img = cv2.imread(frame_path)
+            if img is None:
+                print(f"Warning: Failed to read image {frame_path}, skipping.")
+                continue
+
+            h, w = img.shape[:2]
+
+            # Determine destination directories
+            if frame_idx in train_indices:
+                img_dst_dir = images_train_dir
+                label_dst_dir = labels_train_dir
+            else:
+                img_dst_dir = images_val_dir
+                label_dst_dir = labels_val_dir
+
+            # Copy image
+            img_dst_path = os.path.join(img_dst_dir, frame_name)
+            shutil.copyfile(frame_path, img_dst_path)
+
+            # Write label file
+            label_file_name = os.path.splitext(frame_name)[0] + ".txt"
+            label_file_path = os.path.join(label_dst_dir, label_file_name)
+
+            # Collect all boxes for this frame
+            lines = []
+            for (obj_id, f_idx), (x_min, y_min, x_max, y_max) in boxes.items():
+                if f_idx != frame_idx:
+                    continue
+                # Find class_id by matching obj_id to labels
+                # self.labels maps object_name -> obj_id, so invert it
+                # but object_name is like "obj_{obj_id}"
+                # So we find the object_name with matching obj_id
+                obj_name = None
+                for name, id_ in self.labels.items():
+                    if id_ == obj_id:
+                        obj_name = name
+                        break
+                if obj_name is None:
+                    print(f"Warning: obj_id {obj_id} not found in labels, skipping.")
+                    continue
+                class_id = class_name_to_id[obj_name]
+
+                # Normalize coordinates to YOLO format: x_center, y_center, width, height
+                x_center = ((x_min + x_max) / 2) / w
+                y_center = ((y_min + y_max) / 2) / h
+                box_width = (x_max - x_min) / w
+                box_height = (y_max - y_min) / h
+
+                # Clamp values to [0,1]
+                x_center = min(max(x_center, 0.0), 1.0)
+                y_center = min(max(y_center, 0.0), 1.0)
+                box_width = min(max(box_width, 0.0), 1.0)
+                box_height = min(max(box_height, 0.0), 1.0)
+
+                lines.append(f"{class_id} {x_center:.6f} {y_center:.6f} {box_width:.6f} {box_height:.6f}")
+
+            with open(label_file_path, "w") as f:
+                f.write("\n".join(lines))
+
+        if write_data_yaml:
+            data_yaml_path = os.path.join(root_dir, "data.yaml")
+            data_yaml = {
+                'path': root_dir,
+                'train': 'images/train',
+                'val': 'images/val',
+                'names': [name for name, _ in sorted_labels]
+            }
+            with open(data_yaml_path, "w") as f:
+                yaml.dump(data_yaml, f)
+
+        print(f"YOLOv8 dataset exported to {root_dir} with train/val split {train_ratio}")
 
 
 if __name__ == "__main__":
@@ -268,4 +379,7 @@ if __name__ == "__main__":
     # runner.visualize_masks(stride=1)
     
     # show bounding boxes
-    boxes = runner.create_bounding_boxes(save=True)
+    # boxes = runner.create_bounding_boxes(visualize=True)
+    
+    # Export to YOLOv8 format
+    runner.export_yolov8_dataset(train_ratio=0.8, write_data_yaml=True)
