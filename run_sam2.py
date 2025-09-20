@@ -196,7 +196,7 @@ class SAM2VideoRunner:
                         np.save(os.path.join(self.save_dir, f"mask_obj{obj_id}_{out_frame_idx:04d}.npy"), mask)
 
     # visualize the masks on frames at a given stride 
-    def visualize_masks(self, stride=30):
+    def visualize_masks(self, stride=30, bbox=True):
         for out_frame_idx in range(0, len(self.frame_names), stride):
             frame_path = os.path.join(self.frames_folder, self.frame_names[out_frame_idx])
             frame = cv2.imread(frame_path)
@@ -210,16 +210,46 @@ class SAM2VideoRunner:
         cv2.destroyAllWindows()
         
     # creates bounding boxes for each object in the mask 
-    def create_bounding_boxes(self, masks):
+    def create_bounding_boxes(self, save=False):
         boxes = {}
-        for obj_id, mask in masks.items():
-            ys, xs = np.where(mask)
-            if len(xs) == 0 or len(ys) == 0:
+        
+        for out_frame_idx in self.video_segments:
+            masks = self.video_segments[out_frame_idx]
+            frame_path = os.path.join(self.frames_folder, self.frame_names[out_frame_idx])
+            frame = cv2.imread(frame_path)
+            if frame is None:
                 continue
-            x_min, x_max = xs.min(), xs.max()
-            y_min, y_max = ys.min(), ys.max()
-            boxes[obj_id] = (x_min, y_min, x_max, y_max)
+            for obj_id, mask in masks.items():
+                # Squeeze mask to 2D if needed
+                if mask.ndim == 4 and mask.shape[0] == 1 and mask.shape[1] == 1:
+                    mask_squeezed = mask.squeeze(0).squeeze(0)
+                elif mask.ndim == 3 and mask.shape[0] == 1:
+                    mask_squeezed = mask.squeeze(0)
+                else:
+                    mask_squeezed = mask
+                # Resize mask if dimensions don't match
+                if mask_squeezed.shape != frame.shape[:2]:
+                    mask_resized = cv2.resize(mask_squeezed.astype(np.float32), (frame.shape[1], frame.shape[0]))
+                else:
+                    mask_resized = mask_squeezed
+                ys, xs = np.where(mask_resized > 0.5)
+                if len(xs) == 0 or len(ys) == 0:
+                    continue
+                x_min, x_max = xs.min(), xs.max()
+                y_min, y_max = ys.min(), ys.max()
+                boxes[(obj_id, out_frame_idx)] = (x_min, y_min, x_max, y_max)
+                # visualize the box on the frame with consistent color
+                cmap = plt.get_cmap("tab10")
+                cmap_idx = obj_id if obj_id is not None else 0
+                color_float = cmap(cmap_idx)[:3]
+                color = tuple(int(255 * c) for c in color_float)
+                cv2.rectangle(frame, (x_min, y_min), (x_max, y_max), color, 2)
+                cv2.putText(frame, f"obj {obj_id}", (x_min, y_min - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+            cv2.imshow("Bounding Box", frame)
+            cv2.waitKey(100)
+        cv2.destroyAllWindows()
         return boxes
+    
 
 
 if __name__ == "__main__":
@@ -235,4 +265,7 @@ if __name__ == "__main__":
     runner.propagate(save=True, visualize=True)
     
     # Visualize masks on frames at a given stride
-    runner.visualize_masks(stride=1)
+    # runner.visualize_masks(stride=1)
+    
+    # show bounding boxes
+    boxes = runner.create_bounding_boxes(save=True)
