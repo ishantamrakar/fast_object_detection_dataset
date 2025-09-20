@@ -41,6 +41,15 @@ class SAM2VideoRunner:
         self.box = None 
         self.vis_frame_stride = 30
         self.annotated_frame = None 
+        self.video_segments = {}
+        
+        self.frame_names = [
+            p for p in os.listdir(frames_folder)
+            if os.path.splitext(p)[-1].lower() in [".jpg", ".jpeg"]
+        ]
+        
+        self.frame_names.sort(key=lambda p: int(os.path.splitext(p)[0]))
+        
         
     def show_mask(self, mask, ax, obj_id=None, random_color=False):
             if random_color:
@@ -173,37 +182,44 @@ class SAM2VideoRunner:
                     print(f"Labels: {self.labels}")
                     return
             
-
     def propagate(self, save = True, visualize=False):
-        video_segments = {}
+        self.video_segments = {}
         for out_frame_idx, out_obj_ids, out_mask_logits in self.predictor.propagate_in_video(self.state):
-                video_segments[out_frame_idx] = {
+                self.video_segments[out_frame_idx] = {
                     out_obj_id: (out_mask_logits[i] > 0.0).cpu().numpy()
                     for i, out_obj_id in enumerate(out_obj_ids)
                 }
                 if save: 
                     if not os.path.exists(self.save_dir):
                         os.makedirs(self.save_dir)
-                    for obj_id, mask in video_segments[out_frame_idx].items():
+                    for obj_id, mask in self.video_segments[out_frame_idx].items():
                         np.save(os.path.join(self.save_dir, f"mask_obj{obj_id}_{out_frame_idx:04d}.npy"), mask)
+
+    # visualize the masks on frames at a given stride 
+    def visualize_masks(self, stride=30):
+        for out_frame_idx in range(0, len(self.frame_names), stride):
+            frame_path = os.path.join(self.frames_folder, self.frame_names[out_frame_idx])
+            frame = cv2.imread(frame_path)
+            if frame is None:
+                continue
+            if out_frame_idx in self.video_segments:
+                for obj_id, mask in self.video_segments[out_frame_idx].items():
+                    frame = self.show_mask_opencv(mask, frame, obj_id=obj_id, random_color=False, alpha=0.5)
+            cv2.imshow("Mask Visualization", frame)
+            cv2.waitKey(100)
+        cv2.destroyAllWindows()
         
-        # video_segments = {}
-
-        # with torch.inference_mode():
-        #     for frame_idx, object_ids, masks in self.predictor.propagate_in_video(self.state):
-        #         for obj_idx, obj_id in enumerate(object_ids):
-        #             print(obj_idx)
-        #             print("masks: ",masks)
-        #             mask = masks[0][obj_idx].cpu().numpy()
-        #             if save:
-        #                 if not os.path.exists(self.save_dir):
-        #                     os.makedirs(self.save_dir)
-        #                 np.save(os.path.join(self.save_dir, f"mask_obj{obj_id}_{frame_idx:04d}.npy"), mask)
-
-    def visualize_mask(self, frame_idx, mask):
-        plt.imshow(mask, cmap="jet", alpha=0.5)
-        plt.title(f"Frame {frame_idx}")
-        plt.show()
+    # creates bounding boxes for each object in the mask 
+    def create_bounding_boxes(self, masks):
+        boxes = {}
+        for obj_id, mask in masks.items():
+            ys, xs = np.where(mask)
+            if len(xs) == 0 or len(ys) == 0:
+                continue
+            x_min, x_max = xs.min(), xs.max()
+            y_min, y_max = ys.min(), ys.max()
+            boxes[obj_id] = (x_min, y_min, x_max, y_max)
+        return boxes
 
 
 if __name__ == "__main__":
@@ -217,3 +233,6 @@ if __name__ == "__main__":
 
     # Propagate
     runner.propagate(save=True, visualize=True)
+    
+    # Visualize masks on frames at a given stride
+    runner.visualize_masks(stride=1)
