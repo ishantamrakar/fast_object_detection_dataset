@@ -44,7 +44,7 @@ class SAM2VideoRunner:
         self.labels = {}
         self.points = None
         self.box = None 
-        self.vis_frame_stride = 30
+        self.vis_frame_stride = 5
         self.annotated_frame = None 
         self.video_segments = {}
 
@@ -139,7 +139,7 @@ class SAM2VideoRunner:
                     print(f"Clicked at {x}, {y}")
                     points.append([float(x), float(y)])  # <-- float list
                     labels.append(1)
-                    cv2.circle(frame, (x, y), 10, (255, 0, 0), -1)
+                    cv2.circle(frame, (x, y), 4, (0, 200, 255), -1)
                     cv2.imshow("Frame", frame)
 
             cv2.namedWindow("Frame", cv2.WINDOW_NORMAL)
@@ -179,6 +179,13 @@ class SAM2VideoRunner:
                         print("No points clicked for this object.")
                     break
                 elif key == 27:  # ESC key
+                    # exit if no points were added for this object
+                    if not self.labels:
+                        print("No objects were selected. Exiting.")
+                        cv2.destroyAllWindows()
+                        cv2.waitKey(1)
+                        return 
+                        
                     cv2.destroyAllWindows()
                     cv2.waitKey(1)
                     print("Finished adding objects.")
@@ -186,17 +193,32 @@ class SAM2VideoRunner:
                     return
             
     def propagate(self, save = True, visualize=False):
+        if self.labels is None or len(self.labels) == 0:
+            print("No labels defined. Please add prompts first.")
+            return
         self.video_segments = {}
         for out_frame_idx, out_obj_ids, out_mask_logits in self.predictor.propagate_in_video(self.state):
+                frame_path = os.path.join(self.frames_folder, self.frame_names[out_frame_idx])
+                frame = cv2.imread(frame_path)
+                if frame is None:
+                    continue
+                
                 self.video_segments[out_frame_idx] = {
                     out_obj_id: (out_mask_logits[i] > 0.0).cpu().numpy()
                     for i, out_obj_id in enumerate(out_obj_ids)
                 }
                 if save: 
-                    if not os.path.exists(self.save_dir):
-                        os.makedirs(self.save_dir)
+                    pass
+                    # if not os.path.exists(self.save_dir):
+                    #     os.makedirs(self.save_dir)
+                    # for obj_id, mask in self.video_segments[out_frame_idx].items():
+                    #     np.save(os.path.join(self.save_dir, f"mask_obj{obj_id}_{out_frame_idx:04d}.npy"), mask)
+                
+                if visualize:
                     for obj_id, mask in self.video_segments[out_frame_idx].items():
-                        np.save(os.path.join(self.save_dir, f"mask_obj{obj_id}_{out_frame_idx:04d}.npy"), mask)
+                        frame = self.show_mask_opencv(mask, frame, obj_id=obj_id, random_color=False, alpha=0.5)
+                    cv2.imshow("Propagation", frame)
+                    cv2.waitKey(1)
 
     # visualize the masks on frames at a given stride 
     def visualize_masks(self, stride=30, bbox=True):
@@ -209,7 +231,7 @@ class SAM2VideoRunner:
                 for obj_id, mask in self.video_segments[out_frame_idx].items():
                     frame = self.show_mask_opencv(mask, frame, obj_id=obj_id, random_color=False, alpha=0.5)
             cv2.imshow("Mask Visualization", frame)
-            cv2.waitKey(100)
+            cv2.waitKey(200)
         cv2.destroyAllWindows()
         
     # creates bounding boxes for each object in the mask 
@@ -253,6 +275,10 @@ class SAM2VideoRunner:
                     cv2.putText(frame, f"obj {obj_id}", (x_min, y_min - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
             if visualize:
                 cv2.imshow("Bounding Box", frame)
+                # save the frame with boxes
+                if not os.path.exists(self.save_dir):
+                    os.makedirs(self.save_dir)
+                cv2.imwrite(os.path.join(self.save_dir, f"bbox_{out_frame_idx:04d}.jpg"), frame)
                 cv2.waitKey(100)
         cv2.destroyAllWindows()
         return boxes
@@ -363,7 +389,7 @@ class SAM2VideoRunner:
 
 
 if __name__ == "__main__":
-    frames_path = "/Users/itamrakar/Documents/Projects/fast_object_detection_dataset/data/IMG_3550_frames"
+    frames_path = "/Users/itamrakar/Documents/Projects/fast_object_detection_dataset/data/IMG_3551_frames"
 
     runner = SAM2VideoRunner(frames_path, device="cpu")
     runner.init_video()
@@ -381,4 +407,4 @@ if __name__ == "__main__":
     boxes = runner.create_bounding_boxes(visualize=True)
     
     # Export to YOLOv8 format
-    runner.export_yolov8_dataset(train_ratio=0.8, write_data_yaml=True)
+    # runner.export_yolov8_dataset(train_ratio=0.8, write_data_yaml=True)

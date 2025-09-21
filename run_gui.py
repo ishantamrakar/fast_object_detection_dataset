@@ -68,6 +68,8 @@ class LabelSelector(QWidget):
         # Update current mapping by adding the selected label 
         self.current_mapping[text] = self.class_mapping[text]
         self.selected_label = text
+        self.combo_box.setCurrentIndex(-1)
+        self.combo_box.setEditText("")
         self.close()
 
 _app = None
