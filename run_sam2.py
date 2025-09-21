@@ -1,5 +1,4 @@
 import os
-os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
 
 import numpy as np
 import torch
@@ -9,6 +8,9 @@ from sam2.sam2_video_predictor import SAM2VideoPredictor
 import shutil
 import random
 import yaml
+
+# Import the label selection GUI function
+from run_gui import get_label
 
 
 class SAM2VideoRunner:
@@ -122,11 +124,10 @@ class SAM2VideoRunner:
             return
 
         obj_id = len(self.labels) + 1
-        
-        if self.annotated_frame is None: 
+
+        if self.annotated_frame is None:
             self.annotated_frame = original_frame.copy()
-            
-        
+
         while True:
             points = []
             labels = []
@@ -144,7 +145,6 @@ class SAM2VideoRunner:
             cv2.namedWindow("Frame", cv2.WINDOW_NORMAL)
             cv2.imshow("Frame", frame)
             cv2.setMouseCallback("Frame", click_point)
-            
 
             print(f"Object {obj_id}: Please click points (left click). Press ENTER to confirm, ESC to finish all objects.")
 
@@ -156,32 +156,31 @@ class SAM2VideoRunner:
                         coords = np.array(points, dtype=np.float32).reshape(-1, 2)
                         lbls = np.array(labels, dtype=np.int32).reshape(-1)
                         frame_idx, object_ids, masks = self.add_point_prompt(coords, lbls, obj_id=obj_id)
-                        
+
                         # Visualize the mask on the original frame
                         self.annotated_frame = fresh_frame.copy()
-                        for i, obj_id in enumerate(object_ids):
-                            self.annotated_frame = self.show_mask_opencv(masks[i].cpu().numpy(), self.annotated_frame, obj_id=obj_id, random_color=False, alpha=0.5)
+                        for i, oid in enumerate(object_ids):
+                            self.annotated_frame = self.show_mask_opencv(masks[i].cpu().numpy(), self.annotated_frame, obj_id=oid, random_color=False, alpha=0.5)
                         cv2.imshow("Frame", self.annotated_frame)
-                        
-                        
-                        # fig, ax = plt.subplots(1, 1, figsize=(5, 5))
-                        # ax.imshow(cv2.cvtColor(original_frame, cv2.COLOR_BGR2RGB))
-                        # for i, obj_id in enumerate(object_ids):
-                        #     self.show_mask(masks[i].cpu().numpy(), ax, obj_id=obj_id, random_color=False)
-                        # plt.axis('off')
-                        # plt.show()
-                        
-                        object_name = f"obj_{obj_id}" # placeholder 
-                        self.labels[object_name] = obj_id
-                        print(f"Added object {obj_id} with {len(points)} points.")
+
+                        # --- LABEL SELECTION GUI ---
+                        # Show the GUI to select a label for this object
+                        print("Please select a label for the object (after closing this window).")
+                        selected_label, current_mapping = get_label()
+                        print("selected label: ", selected_label)
+                        if selected_label is None:
+                            print("No label selected. Skipping object.")
+                            break
+                        # Assign the selected label to this object id
+                        self.labels = current_mapping
+                        print(f"Added object {obj_id} with label '{selected_label}' and {len(points)} points.")
                         obj_id = len(self.labels) + 1
-                        
                     else:
                         print("No points clicked for this object.")
                     break
                 elif key == 27:  # ESC key
                     cv2.destroyAllWindows()
-                    cv2.waitKey(1) 
+                    cv2.waitKey(1)
                     print("Finished adding objects.")
                     print(f"Labels: {self.labels}")
                     return
@@ -379,7 +378,7 @@ if __name__ == "__main__":
     # runner.visualize_masks(stride=1)
     
     # show bounding boxes
-    # boxes = runner.create_bounding_boxes(visualize=True)
+    boxes = runner.create_bounding_boxes(visualize=True)
     
     # Export to YOLOv8 format
     runner.export_yolov8_dataset(train_ratio=0.8, write_data_yaml=True)
