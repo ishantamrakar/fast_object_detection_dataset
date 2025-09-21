@@ -42,13 +42,13 @@ class SAM2VideoRunner:
         
         self.current_frame = None
         self.labels = {}
+        self.object_id_to_label = {}  # Mapping from obj_id to selected label
         self.points = None
         self.box = None 
         self.vis_frame_stride = 5
         self.annotated_frame = None 
         self.video_segments = {}
 
-        
         self.frame_names = [
             p for p in os.listdir(frames_folder)
             if os.path.splitext(p)[-1].lower() in [".jpg", ".jpeg"]
@@ -173,6 +173,7 @@ class SAM2VideoRunner:
                             break
                         # Assign the selected label to this object id
                         self.labels = current_mapping
+                        self.object_id_to_label[obj_id] = selected_label
                         print(f"Added object {obj_id} with label '{selected_label}' and {len(points)} points.")
                         obj_id = len(self.labels) + 1
                     else:
@@ -297,8 +298,11 @@ class SAM2VideoRunner:
 
         # Map object names to class ids (0-based)
         sorted_labels = sorted(self.labels.items(), key=lambda x: x[1])
-        class_name_to_id = {name: idx for idx, (name, _) in enumerate(sorted_labels)}
-
+        print("sorted labels: ", sorted_labels)
+        class_name_to_id = self.labels.copy()
+        print("class_name_to_id: ", class_name_to_id)
+        
+        
         # Get bounding boxes
         boxes = self.create_bounding_boxes(visualize=False)
 
@@ -343,19 +347,15 @@ class SAM2VideoRunner:
             for (obj_id, f_idx), (x_min, y_min, x_max, y_max) in boxes.items():
                 if f_idx != frame_idx:
                     continue
-                # Find class_id by matching obj_id to labels
-                # self.labels maps object_name -> obj_id, so invert it
-                # but object_name is like "obj_{obj_id}"
-                # So we find the object_name with matching obj_id
-                obj_name = None
-                for name, id_ in self.labels.items():
-                    if id_ == obj_id:
-                        obj_name = name
-                        break
-                if obj_name is None:
-                    print(f"Warning: obj_id {obj_id} not found in labels, skipping.")
+                # Use object_id_to_label to get the correct label for this obj_id
+                if obj_id not in self.object_id_to_label:
+                    print(f"Warning: obj_id {obj_id} not found in object_id_to_label mapping, skipping.")
                     continue
-                class_id = class_name_to_id[obj_name]
+                label = self.object_id_to_label[obj_id]
+                if label not in self.labels:
+                    print(f"Warning: label '{label}' for obj_id {obj_id} not found in labels mapping, skipping.")
+                    continue
+                class_id = class_name_to_id[label]
 
                 # Normalize coordinates to YOLO format: x_center, y_center, width, height
                 x_center = ((x_min + x_max) / 2) / w
@@ -389,7 +389,7 @@ class SAM2VideoRunner:
 
 
 if __name__ == "__main__":
-    frames_path = "/Users/itamrakar/Documents/Projects/fast_object_detection_dataset/data/IMG_3551_frames"
+    frames_path = "/Users/itamrakar/Documents/Projects/fast_object_detection_dataset/data/IMG_3550_frames"
 
     runner = SAM2VideoRunner(frames_path, device="cpu")
     runner.init_video()
@@ -407,4 +407,4 @@ if __name__ == "__main__":
     boxes = runner.create_bounding_boxes(visualize=True)
     
     # Export to YOLOv8 format
-    # runner.export_yolov8_dataset(train_ratio=0.8, write_data_yaml=True)
+    runner.export_yolov8_dataset(train_ratio=0.8, write_data_yaml=True)
