@@ -16,9 +16,12 @@ from run_gui import get_label
 class SAM2VideoRunner:
     def __init__(self, frames_folder, model_id="facebook/sam2-hiera-large", device="cpu"):
         self.frames_folder = frames_folder
+        self.seed = None
+        number = ''.join(filter(str.isdigit, os.path.basename(frames_folder)))
+
         
         self.save_dir = os.path.basename(frames_folder).split("_f")[0] + "_masks"
-        self.dataset_dir = os.path.join(os.path.dirname(frames_folder), "yolov8_dataset")
+        self.dataset_dir = os.path.join(os.path.dirname(frames_folder), "yolov8_dataset_" + number)
 
         if torch.cuda.is_available():
             self.device = torch.device("cuda")
@@ -296,13 +299,12 @@ class SAM2VideoRunner:
         os.makedirs(labels_train_dir, exist_ok=True)
         os.makedirs(labels_val_dir, exist_ok=True)
 
-        # Map object names to class ids (0-based)
+        # Map object names to class ids (0-based) using sorted labels to preserve original IDs from GUI
         sorted_labels = sorted(self.labels.items(), key=lambda x: x[1])
         print("sorted labels: ", sorted_labels)
-        class_name_to_id = self.labels.copy()
-        print("class_name_to_id: ", class_name_to_id)
-        
-        
+        class_name_to_id = {name: idx for name, idx in sorted_labels}
+        print("class_name_to_id (from GUI mapping): ", class_name_to_id)
+
         # Get bounding boxes
         boxes = self.create_bounding_boxes(visualize=False)
 
@@ -312,10 +314,9 @@ class SAM2VideoRunner:
             frames_with_boxes.add(frame_idx)
 
         frame_indices = sorted(list(frames_with_boxes))
-        num_train = int(len(frame_indices) * train_ratio)
-        train_indices = set(frame_indices[:num_train])
-        val_indices = set(frame_indices[num_train:])
 
+        # Step 1: Write all label files and collect labeled frames
+        labeled_frames = []
         for frame_idx in frame_indices:
             frame_name = self.frame_names[frame_idx]
             frame_path = os.path.join(self.frames_folder, frame_name)
@@ -323,24 +324,11 @@ class SAM2VideoRunner:
             if img is None:
                 print(f"Warning: Failed to read image {frame_path}, skipping.")
                 continue
-
             h, w = img.shape[:2]
-
-            # Determine destination directories
-            if frame_idx in train_indices:
-                img_dst_dir = images_train_dir
-                label_dst_dir = labels_train_dir
-            else:
-                img_dst_dir = images_val_dir
-                label_dst_dir = labels_val_dir
-
-            # Copy image
-            img_dst_path = os.path.join(img_dst_dir, frame_name)
-            shutil.copyfile(frame_path, img_dst_path)
-
-            # Write label file
+            # Write label file in a temp location (or just in root_dir/labels/all/)
             label_file_name = os.path.splitext(frame_name)[0] + ".txt"
-            label_file_path = os.path.join(label_dst_dir, label_file_name)
+            label_file_path = os.path.join(root_dir, "labels", label_file_name)
+            os.makedirs(os.path.dirname(label_file_path), exist_ok=True)
 
             # Collect all boxes for this frame
             lines = []
@@ -352,8 +340,8 @@ class SAM2VideoRunner:
                     print(f"Warning: obj_id {obj_id} not found in object_id_to_label mapping, skipping.")
                     continue
                 label = self.object_id_to_label[obj_id]
-                if label not in self.labels:
-                    print(f"Warning: label '{label}' for obj_id {obj_id} not found in labels mapping, skipping.")
+                if label not in class_name_to_id:
+                    print(f"Warning: label '{label}' for obj_id {obj_id} not found in class_name_to_id mapping, skipping.")
                     continue
                 class_id = class_name_to_id[label]
 
@@ -373,6 +361,35 @@ class SAM2VideoRunner:
 
             with open(label_file_path, "w") as f:
                 f.write("\n".join(lines))
+            # Collect this as a labeled frame (image path, label path, frame name)
+            labeled_frames.append({
+                "frame_idx": frame_idx,
+                "frame_name": frame_name,
+                "image_path": frame_path,
+                "label_path": label_file_path
+            })
+
+        # Step 2: Shuffle and split into train/val
+        if self.seed is not None:
+            random.seed(self.seed)
+        random.shuffle(labeled_frames)
+        num_train = int(len(labeled_frames) * train_ratio)
+        train_frames = labeled_frames[:num_train]
+        val_frames = labeled_frames[num_train:]
+
+        # Step 3: Move/copy images and label files into train/val folders
+        for split_frames, img_dst_dir, label_dst_dir in [
+            (train_frames, images_train_dir, labels_train_dir),
+            (val_frames, images_val_dir, labels_val_dir)
+        ]:
+            for item in split_frames:
+                # Copy image
+                dst_img_path = os.path.join(img_dst_dir, item["frame_name"])
+                shutil.copyfile(item["image_path"], dst_img_path)
+                # Copy label
+                label_file_name = os.path.splitext(item["frame_name"])[0] + ".txt"
+                dst_label_path = os.path.join(label_dst_dir, label_file_name)
+                shutil.copyfile(item["label_path"], dst_label_path)
 
         if write_data_yaml:
             data_yaml_path = os.path.join(root_dir, "data.yaml")
@@ -389,7 +406,7 @@ class SAM2VideoRunner:
 
 
 if __name__ == "__main__":
-    frames_path = "/Users/itamrakar/Documents/Projects/fast_object_detection_dataset/data/IMG_3550_frames"
+    frames_path = "/Users/itamrakar/Documents/Projects/fast_object_detection_dataset/data/IMG_3551_frames"
 
     runner = SAM2VideoRunner(frames_path, device="cpu")
     runner.init_video()
@@ -407,4 +424,5 @@ if __name__ == "__main__":
     boxes = runner.create_bounding_boxes(visualize=True)
     
     # Export to YOLOv8 format
+    runner.seed = 42  
     runner.export_yolov8_dataset(train_ratio=0.8, write_data_yaml=True)

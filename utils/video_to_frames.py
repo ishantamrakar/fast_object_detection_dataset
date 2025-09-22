@@ -29,7 +29,18 @@ def video_to_frames(video_path="./data/IMG_3550.MOV", output_folder=None, frame_
         if frame_idx % frame_sampling_rate == 0:
             filename = os.path.join(output_folder, f"{saved_frame_idx:06d}.jpg")
             # resize frame 
-            frame = cv2.resize(frame, (size, size))
+            # if frame is not square, resize and pad to make it square using opencv
+            h, w, _ = frame.shape
+            if h != w:
+                # crop and pad to make it square and without black borders
+                print(f"Frame {frame_idx} is not square: {w}x{h}, cropping and resizing. Objects may be cut off.")
+                dim = min(h, w)
+                top = (h - dim) // 2
+                left = (w - dim) // 2
+                frame = frame[top:top+dim, left:left+dim]
+                frame = cv2.resize(frame, (size, size))
+            else:
+                frame = cv2.resize(frame, (size, size))
             cv2.imwrite(filename, frame)
             saved_frame_idx += 1
 
