@@ -6,6 +6,8 @@ import matplotlib.pyplot as plt
 import cv2
 from sam2.sam2_video_predictor import SAM2VideoPredictor
 import shutil
+import glob
+import json
 import random
 import yaml
 
@@ -288,6 +290,7 @@ class SAM2VideoRunner:
         return boxes
 
     def export_yolov8_dataset(self, train_ratio=0.8, write_data_yaml=True):
+        import shutil
         root_dir = self.dataset_dir
         images_train_dir = os.path.join(root_dir, "images", "train")
         images_val_dir = os.path.join(root_dir, "images", "val")
@@ -298,6 +301,10 @@ class SAM2VideoRunner:
         os.makedirs(images_val_dir, exist_ok=True)
         os.makedirs(labels_train_dir, exist_ok=True)
         os.makedirs(labels_val_dir, exist_ok=True)
+
+        # Use a temporary directory for label files
+        labels_temp_dir = os.path.join(root_dir, "labels_temp")
+        os.makedirs(labels_temp_dir, exist_ok=True)
 
         # Map object names to class ids (0-based) using sorted labels to preserve original IDs from GUI
         sorted_labels = sorted(self.labels.items(), key=lambda x: x[1])
@@ -325,9 +332,9 @@ class SAM2VideoRunner:
                 print(f"Warning: Failed to read image {frame_path}, skipping.")
                 continue
             h, w = img.shape[:2]
-            # Write label file in a temp location (or just in root_dir/labels/all/)
+            # Write label file in a temp location
             label_file_name = os.path.splitext(frame_name)[0] + ".txt"
-            label_file_path = os.path.join(root_dir, "labels", label_file_name)
+            label_file_path = os.path.join(labels_temp_dir, label_file_name)
             os.makedirs(os.path.dirname(label_file_path), exist_ok=True)
 
             # Collect all boxes for this frame
@@ -380,13 +387,12 @@ class SAM2VideoRunner:
         # Step 3: Move/copy images and label files into train/val folders
         for split_frames, img_dst_dir, label_dst_dir in [
             (train_frames, images_train_dir, labels_train_dir),
-            (val_frames, images_val_dir, labels_val_dir)
-        ]:
+            (val_frames, images_val_dir, labels_val_dir)]:
             for item in split_frames:
                 # Copy image
                 dst_img_path = os.path.join(img_dst_dir, item["frame_name"])
                 shutil.copyfile(item["image_path"], dst_img_path)
-                # Copy label
+                # Copy label (from temp directory)
                 label_file_name = os.path.splitext(item["frame_name"])[0] + ".txt"
                 dst_label_path = os.path.join(label_dst_dir, label_file_name)
                 shutil.copyfile(item["label_path"], dst_label_path)
@@ -402,27 +408,169 @@ class SAM2VideoRunner:
             with open(data_yaml_path, "w") as f:
                 yaml.dump(data_yaml, f)
 
+        # Clean up the temporary labels directory
+        try:
+            shutil.rmtree(labels_temp_dir)
+        except Exception as e:
+            print(f"Warning: Could not remove temp label directory {labels_temp_dir}: {e}")
+
         print(f"YOLOv8 dataset exported to {root_dir} with train/val split {train_ratio}")
+        
+    def collate_datasets(self, base_dir, target_dir, seed=42, keep_splits=False):
+        image_exts = (".jpg", ".jpeg", ".png")
+
+        # discover candidate dataset folders inside base_dir
+        candidate_dirs = []
+        if not os.path.isdir(base_dir):
+            print(f"collate_datasets: base_dir does not exist: {base_dir}")
+            return 0
+        for entry in os.listdir(base_dir):
+            p = os.path.join(base_dir, entry)
+            if not os.path.isdir(p):
+                continue
+            # heuristics: contains images/ or images/train
+            if os.path.isdir(os.path.join(p, "images")) or os.path.isdir(os.path.join(p, "images", "train")):
+                candidate_dirs.append(p)
+        if not candidate_dirs:
+            print(f"collate_datasets: no dataset-like folders found in {base_dir}")
+            return 0
+
+        # create target directories
+        if keep_splits:
+            images_train_dir = os.path.join(target_dir, "images", "train")
+            images_val_dir = os.path.join(target_dir, "images", "val")
+            labels_train_dir = os.path.join(target_dir, "labels", "train")
+            labels_val_dir = os.path.join(target_dir, "labels", "val")
+            os.makedirs(images_train_dir, exist_ok=True)
+            os.makedirs(images_val_dir, exist_ok=True)
+            os.makedirs(labels_train_dir, exist_ok=True)
+            os.makedirs(labels_val_dir, exist_ok=True)
+        else:
+            images_dir = os.path.join(target_dir, "images")
+            labels_dir = os.path.join(target_dir, "labels")
+            os.makedirs(images_dir, exist_ok=True)
+            os.makedirs(labels_dir, exist_ok=True)
+
+        # gather image/label pairs
+        entries = []
+        seen = set()
+        for d in candidate_dirs:
+            # check several possible image root locations
+            for images_root in [os.path.join(d, "images", "train"), os.path.join(d, "images", "val"), os.path.join(d, "images")]:
+                if not os.path.isdir(images_root):
+                    continue
+                for fname in os.listdir(images_root):
+                    if not any(fname.lower().endswith(ext) for ext in image_exts):
+                        continue
+                    img_path = os.path.join(images_root, fname)
+                    if img_path in seen:
+                        continue
+                    seen.add(img_path)
+                    base = os.path.splitext(fname)[0]
+                    label_path = None
+                    # search for corresponding label in standard places
+                    for lbl_root in [os.path.join(d, "labels", "train"), os.path.join(d, "labels", "val"), os.path.join(d, "labels")]:
+                        candidate_lbl = os.path.join(lbl_root, base + ".txt")
+                        if os.path.exists(candidate_lbl):
+                            label_path = candidate_lbl
+                            break
+                    entries.append({"image": img_path, "label": label_path, "source": d})
+
+        # shuffle
+        if seed is not None:
+            random.seed(seed)
+        random.shuffle(entries)
+
+        # copy and rename
+        manifest = []
+        idx = 0
+        for e in entries:
+            idx += 1
+            src_img = e["image"]
+            src_lbl = e.get("label")
+            ext = os.path.splitext(src_img)[1].lower()
+            new_basename = f"{idx:06d}"
+            new_img_name = new_basename + ext
+
+            if keep_splits:
+                # try infer original split from path
+                low = src_img.lower()
+                if os.sep + "train" + os.sep in low:
+                    dst_img_dir = images_train_dir
+                    dst_lbl_dir = labels_train_dir
+                elif os.sep + "val" + os.sep in low:
+                    dst_img_dir = images_val_dir
+                    dst_lbl_dir = labels_val_dir
+                else:
+                    # default to train if unknown
+                    print(f"Warning: cannot infer train/val split for {src_img}, defaulting to train for all datapoints")
+                    dst_img_dir = images_train_dir
+                    dst_lbl_dir = labels_train_dir
+            else:
+                dst_img_dir = images_dir
+                dst_lbl_dir = labels_dir
+
+            dst_img_path = os.path.join(dst_img_dir, new_img_name)
+            dst_lbl_path = os.path.join(dst_lbl_dir, new_basename + ".txt")
+
+            try:
+                shutil.copyfile(src_img, dst_img_path)
+            except Exception as exc:
+                print(f"Failed to copy image {src_img} -> {dst_img_path}: {exc}")
+                continue
+
+            if src_lbl and os.path.exists(src_lbl):
+                shutil.copyfile(src_lbl, dst_lbl_path)
+            else:
+                # create empty label file if none exists so YOLO dataset loaders don't error
+                print(f"Warning: no label file for image {src_img}, creating empty label file")
+                open(dst_lbl_path, "w").close()
+
+            manifest.append({
+                "source": e["source"],
+                "original_image": src_img,
+                "original_label": src_lbl,
+                "new_image": dst_img_path,
+                "new_label": dst_lbl_path,
+            })
+
+        # write manifest for debug / reproducibility
+        os.makedirs(target_dir, exist_ok=True)
+        manifest_path = os.path.join(target_dir, "collate_manifest.json")
+        with open(manifest_path, "w") as mf:
+            json.dump(manifest, mf, indent=2)
+
+        print(f"Collated {len(manifest)} images into {target_dir}")
+        return len(manifest)
+        
 
 
 if __name__ == "__main__":
-    frames_path = "/Users/itamrakar/Documents/Projects/fast_object_detection_dataset/data/IMG_3551_frames"
+    
+    frames_path = "/Users/itamrakar/Documents/Projects/fast_object_detection_dataset/data/A001_09241756_C008_frames"
 
     runner = SAM2VideoRunner(frames_path, device="cpu")
-    runner.init_video()
+    # runner.init_video()
 
     # Point prompt with multiple points and multiple objects
-    runner.add_click_prompt()
+    # runner.add_click_prompt()
 
     # Propagate
-    runner.propagate(save=True, visualize=True)
+    # runner.propagate(save=True, visualize=True)
     
     # Visualize masks on frames at a given stride
     # runner.visualize_masks(stride=1)
     
     # show bounding boxes
-    boxes = runner.create_bounding_boxes(visualize=True)
+    # boxes = runner.create_bounding_boxes(visualize=True)
     
     # Export to YOLOv8 format
-    runner.seed = 42  
-    runner.export_yolov8_dataset(train_ratio=0.8, write_data_yaml=True)
+    # runner.seed = 42  
+    # runner.export_yolov8_dataset(train_ratio=0.8, write_data_yaml=True)
+    
+    # Collate multiple datasets
+    base_dir = "/Users/itamrakar/Documents/Projects/fast_object_detection_dataset/data"
+    target_dir = "/Users/itamrakar/Documents/Projects/fast_object_detection_dataset/collated_dataset"
+    runner.collate_datasets(base_dir, target_dir, seed=42, keep_splits=True)
+    
+    

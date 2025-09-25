@@ -1,6 +1,9 @@
 import cv2
 import os
 import tqdm
+import shutil
+import glob
+import random
 
 def video_to_frames(video_path="./data/IMG_3550.MOV", output_folder=None, frame_sampling_rate=1, size=640):
     if output_folder is None:
@@ -56,9 +59,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Extract frames from video")
     parser.add_argument("video_path", nargs='?', default="./data/IMG_3550.MOV", type=str, help="Path to the video file")
     parser.add_argument("output_folder", nargs='?', default=None, type=str, help="Folder to save extracted frames")
-    parser.add_argument("--frame_sampling_rate", type=int, default=50, help="Save every Nth frame (default=1)")
+    parser.add_argument("--frame_sampling_rate", type=int, default=30, help="Save every Nth frame (default=1)")
     parser.add_argument("--size", type=int, default=640, help="Resize frames to this size (default=640)")
 
     args = parser.parse_args()
 
     video_to_frames(args.video_path, args.output_folder, args.frame_sampling_rate, args.size)
+    
