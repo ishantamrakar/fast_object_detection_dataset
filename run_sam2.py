@@ -550,13 +550,13 @@ if __name__ == "__main__":
     frames_path = "/Users/itamrakar/Documents/Projects/fast_object_detection_dataset/data/A001_09241756_C008_frames"
 
     runner = SAM2VideoRunner(frames_path, device="cpu")
-    # runner.init_video()
+    runner.init_video()
 
     # Point prompt with multiple points and multiple objects
-    # runner.add_click_prompt()
+    runner.add_click_prompt()
 
     # Propagate
-    # runner.propagate(save=True, visualize=True)
+    runner.propagate(save=True, visualize=True)
     
     # Visualize masks on frames at a given stride
     # runner.visualize_masks(stride=1)
