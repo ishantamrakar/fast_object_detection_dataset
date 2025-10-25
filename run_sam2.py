@@ -10,6 +10,7 @@ import glob
 import json
 import random
 import yaml
+from tqdm import tqdm
 
 # Import the label selection GUI function
 from run_gui import get_label
@@ -18,6 +19,7 @@ from run_gui import get_label
 class SAM2VideoRunner:
     def __init__(self, frames_folder, model_id="facebook/sam2-hiera-large", device="cpu"):
         self.frames_folder = frames_folder
+
         self.seed = None
         number = ''.join(filter(str.isdigit, os.path.basename(frames_folder)))
 
@@ -27,9 +29,12 @@ class SAM2VideoRunner:
 
         if torch.cuda.is_available():
             self.device = torch.device("cuda")
+            print("CUDA is available. Using GPU.")
         else:
             self.device = torch.device("cpu")
-        print(f"using device: {device}")
+        print(f"using device: {self.device}")
+
+        # self.device = torch.device("cpu")
         
         if self.device.type == "cuda":
             # use bfloat16 for the entire notebook
@@ -40,7 +45,7 @@ class SAM2VideoRunner:
                 torch.backends.cudnn.allow_tf32 = True
                 
         self.predictor = SAM2VideoPredictor.from_pretrained(
-            "facebook/sam2-hiera-large",
+            "facebook/sam2-hiera-small",
             device=self.device
         )
         self.state = None
@@ -59,8 +64,7 @@ class SAM2VideoRunner:
             if os.path.splitext(p)[-1].lower() in [".jpg", ".jpeg"]
         ]
         
-        self.frame_names.sort(key=lambda p: int(os.path.splitext(p)[0]))
-        
+        self.frame_names.sort(key=lambda p: int(os.path.splitext(p)[0].split('_')[-1]))        
         
     def show_mask(self, mask, ax, obj_id=None, random_color=False):
             if random_color:
@@ -542,14 +546,66 @@ class SAM2VideoRunner:
 
         print(f"Collated {len(manifest)} images into {target_dir}")
         return len(manifest)
+
+    @staticmethod
+    def convert_npy_to_jpg(npy_folder, jpg_folder):
+        if not os.path.exists(jpg_folder):
+            os.makedirs(jpg_folder)
         
+        npy_files = glob.glob(os.path.join(npy_folder, "*.npy"))
+
+        pbar = tqdm(total=len(npy_files), desc="Converting .npy to .jpg")
+
+        for filename in os.listdir(npy_folder):
+            if filename.lower().endswith(".npy"):
+                npy_path = os.path.join(npy_folder, filename)
+                # get only the number part of the filename
+                frame_number = filename.split("_")[-1].split(".")[0]    
+                jpg_filename = frame_number + ".jpg"
+                
+                jpg_path = os.path.join(jpg_folder, jpg_filename)
+
+                img = np.load(npy_path)
+
+                # crop 640x640 region from center if larger
+                h, w = img.shape[:2]
+                if h > 640 and w > 640:
+                    start_y = (h - 640) // 2
+                    start_x = (w - 640) // 2
+                    img = img[start_y:start_y + 640, start_x:start_x + 640]
+
+                if img.ndim != 3 or img.shape[2] !=3:
+                    print(f"Skipping {npy_path}: not a 3-channel image.")
+                    continue
+                
+                cv2.imwrite(jpg_path, img) 
+                pbar.update(1)
+        pbar.close()
+
+        # # add progress bar
+        # pbar = tqdm(total=len(npy_files), desc="Converting .npy to .jpg")
+        # for npy_file in npy_files:
+        #     mask = np.load(npy_file)
+        #     # Normalize mask to 0-255
+        #     mask_norm = (mask * 255).astype(np.uint8)
+        #     # convert bgr to rgb
+        #     mask_norm = cv2.cvtColor(mask_norm, cv2.COLOR_BGR2RGB)
+        #     jpg_file = os.path.join(jpg_folder, os.path.basename(npy_file).replace(".npy", ".jpg"))
+        #     cv2.imwrite(jpg_file, mask_norm)
+        #     pbar.update(1)
+        # pbar.close()
+        print(f"Converted {len(npy_files)} .npy files to .jpg in {jpg_folder}")
 
 
 if __name__ == "__main__":
-    
-    frames_path = "/Users/itamrakar/Documents/Projects/fast_object_detection_dataset/data/A001_09241756_C008_frames"
+    # covert to jpg
+    npy_folder = "/home/matt/projects/NatureNeuromorphicComputingForRobots/inference/calibrate_data_2025_10_24_data/sequence_000003/flir_23604512/frame"
+    jpg_folder = "/home/matt/projects/NatureNeuromorphicComputingForRobots/inference/calibrate_data_2025_10_24_data/sequence_000003/flir_23604512/frame_jpg"
+    SAM2VideoRunner.convert_npy_to_jpg(npy_folder, jpg_folder)
 
-    runner = SAM2VideoRunner(frames_path, device="cpu")
+    frames_path = jpg_folder
+    runner = SAM2VideoRunner(frames_path)
+    
     runner.init_video()
 
     # Point prompt with multiple points and multiple objects
@@ -569,8 +625,8 @@ if __name__ == "__main__":
     # runner.export_yolov8_dataset(train_ratio=0.8, write_data_yaml=True)
     
     # Collate multiple datasets
-    base_dir = "/Users/itamrakar/Documents/Projects/fast_object_detection_dataset/data"
-    target_dir = "/Users/itamrakar/Documents/Projects/fast_object_detection_dataset/collated_dataset"
-    runner.collate_datasets(base_dir, target_dir, seed=42, keep_splits=True)
+    # base_dir = "/Users/itamrakar/Documents/Projects/fast_object_detection_dataset/data"
+    # target_dir = "/Users/itamrakar/Documents/Projects/fast_object_detection_dataset/collated_dataset"
+    # runner.collate_datasets(base_dir, target_dir, seed=42, keep_splits=True)
     
     

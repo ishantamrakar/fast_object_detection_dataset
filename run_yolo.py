@@ -2,7 +2,7 @@ import cv2
 from ultralytics import YOLO
 
 class YOLOVideoInspector: 
-    def __init__(self, model_path="yolov8n.pt",video_path=None):
+    def __init__(self, model_path="/home/matt/projects/fast_object_detection_dataset/best_yolov11_359.pt",video_path=None):
         self.model = YOLO(model_path)
         self.video_path = video_path 
         self.cap = None 
@@ -14,11 +14,16 @@ class YOLOVideoInspector:
             self.cap = cv2.VideoCapture(self.video_path)
         if not self.cap.isOpened():
             raise ValueError(f"Error opening video source: {self.video_path if self.video_path else 'camera'}")
-        
+    
+
     def process_frame(self, frame):
         results = self.model(frame)
         annotated_frame = results[0].plot()
         return annotated_frame
+    
+    def process_frame_raw(self, frame):
+        results = self.model(frame)
+        return results
     
     def run(self):
         self.open_video()
@@ -34,6 +39,8 @@ class YOLOVideoInspector:
         
         self.cap.release()
         cv2.destroyAllWindows()
+
+
         
 if __name__ == "__main__":
     video_file = "/Users/itamrakar/Documents/Projects/fast_dataset/data/IMG_3550.MOV"
