@@ -27,7 +27,10 @@ class SAM2VideoRunner:
         self.save_dir = os.path.basename(frames_folder).split("_f")[0] + "_masks"
         self.dataset_dir = os.path.join(os.path.dirname(frames_folder), "yolov8_dataset_" + number)
 
-        if torch.cuda.is_available():
+        if torch.backends.mps.is_available():
+            self.device = torch.device("mps")
+            print("MPS is available. Using Apple Silicon GPU.")
+        elif torch.cuda.is_available():
             self.device = torch.device("cuda")
             print("CUDA is available. Using GPU.")
         else:
@@ -43,6 +46,9 @@ class SAM2VideoRunner:
             if torch.cuda.get_device_properties(0).major >= 8:
                 torch.backends.cuda.matmul.allow_tf32 = True
                 torch.backends.cudnn.allow_tf32 = True
+        elif self.device.type == "mps":
+            torch.set_default_dtype(torch.float32)
+            print("Using MPS backend (no autocast or TF32).")
                 
         self.predictor = SAM2VideoPredictor.from_pretrained(
             "facebook/sam2-hiera-small",
@@ -599,11 +605,12 @@ class SAM2VideoRunner:
 
 if __name__ == "__main__":
     # covert to jpg
-    npy_folder = "/home/matt/projects/NatureNeuromorphicComputingForRobots/inference/calibrate_data_2025_10_24_data/sequence_000003/flir_23604512/frame"
-    jpg_folder = "/home/matt/projects/NatureNeuromorphicComputingForRobots/inference/calibrate_data_2025_10_24_data/sequence_000003/flir_23604512/frame_jpg"
-    SAM2VideoRunner.convert_npy_to_jpg(npy_folder, jpg_folder)
+    # npy_folder = "/home/matt/projects/NatureNeuromorphicComputingForRobots/inference/calibrate_data_2025_10_24_data/sequence_000003/flir_23604512/frame"
+    # jpg_folder = "/home/matt/projects/NatureNeuromorphicComputingForRobots/inference/calibrate_data_2025_10_24_data/sequence_000003/flir_23604512/frame_jpg"
+    # SAM2VideoRunner.convert_npy_to_jpg(npy_folder, jpg_folder)
 
-    frames_path = jpg_folder
+    # frames_path = jpg_folder
+    frames_path = "/Users/itamrakar/Documents/Projects/fast_object_detection_dataset/data/sequence_000000/proc/flir/frame"
     runner = SAM2VideoRunner(frames_path)
     
     runner.init_video()
