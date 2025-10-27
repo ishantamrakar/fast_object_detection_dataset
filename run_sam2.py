@@ -51,7 +51,7 @@ class SAM2VideoRunner:
             print("Using MPS backend (no autocast or TF32).")
                 
         self.predictor = SAM2VideoPredictor.from_pretrained(
-            "facebook/sam2-hiera-tiny",
+            "facebook/sam2-hiera-small",
             device=self.device
         )
         self.state = None
@@ -286,6 +286,12 @@ class SAM2VideoRunner:
 
             # ---- Initialize state on just this chunk ----
             with torch.inference_mode():
+                # clear GPU memory before initializing new chunk
+                if self.device.type == "cuda":
+
+                    torch.cuda.empty_cache()
+                    torch.cuda.reset_peak_memory_stats()
+                    print(f"GPU memory after emptying cache: {torch.cuda.memory_allocated() / (1024 ** 2):.2f} MB")
                 self.state = self.predictor.init_state(tmp_chunk_folder)
 
             # ---- Add prompts for first frame of chunk ----
@@ -332,7 +338,7 @@ class SAM2VideoRunner:
                     coords = np.stack([xs, ys], axis=1) if len(xs) > 0 else np.zeros((0, 2), dtype=np.float32)
                     if coords.shape[0] == 0:
                         continue  # skip empty mask
-                    n_clusters = min(5, coords.shape[0])
+                    n_clusters = min(10, coords.shape[0])
                     if n_clusters == 1:
                         centroids = coords.astype(np.float32)
                     else:
@@ -375,6 +381,10 @@ class SAM2VideoRunner:
                     last_chunk_masks = out_mask_logits
             try:
                 shutil.rmtree(tmp_chunk_folder)
+                # clear GPU memory 
+                if self.device.type == "cuda":
+                    torch.cuda.empty_cache()
+                    del self.state
             except Exception as e:
                 print(f"Warning: Could not remove temp chunk folder {tmp_chunk_folder}: {e}")
 
@@ -752,7 +762,7 @@ if __name__ == "__main__":
     # SAM2VideoRunner.convert_npy_to_jpg(npy_folder, jpg_folder)
 
     # frames_path = jpg_folder
-    frames_path = "/Users/itamrakar/Documents/Projects/fast_object_detection_dataset/data/sequence_000000/proc/flir/frame"
+    frames_path = "/home/ishan/Documents/Action/fast_object_detection_dataset/data/sequence_000000/proc/flir/frame"
     runner = SAM2VideoRunner(frames_path)
     
     # runner.init_video()
@@ -760,8 +770,9 @@ if __name__ == "__main__":
     # Point prompt with multiple points and multiple objects
     # runner.add_click_prompt()
 
-    # Propagate in chunks (new method)
-    runner.propagate_in_chunks(chunk_size=10, save=True, visualize=True)
+    # Propagate in chunks
+    ### Increase chunk_size until you run out of GPU memory (for long videos)
+    runner.propagate_in_chunks(chunk_size=600, save=True, visualize=True)
     # runner.propagate(save=True, visualize=True)
     
     # Visualize masks on frames at a given stride
