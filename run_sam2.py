@@ -51,7 +51,7 @@ class SAM2VideoRunner:
             print("Using MPS backend (no autocast or TF32).")
                 
         self.predictor = SAM2VideoPredictor.from_pretrained(
-            "facebook/sam2-hiera-small",
+            "facebook/sam2-hiera-tiny",
             device=self.device
         )
         self.state = None
@@ -209,32 +209,174 @@ class SAM2VideoRunner:
                     return
             
     def propagate(self, save = True, visualize=False):
+        # --- Initialization/Prompt Integration ---
+        if self.state is None:
+            # If state not initialized, do so based on device
+            if self.device.type == "cpu":
+                self.init_video()
+            else:
+                # Direct initialization for GPU/MPS, use all frames
+                with torch.inference_mode():
+                    self.state = self.predictor.init_state(self.frames_folder)
+        # Ensure prompts/labels are available
         if self.labels is None or len(self.labels) == 0:
-            print("No labels defined. Please add prompts first.")
-            return
+            print("No prompts/labels found. Please add click prompt interactively.")
+            self.add_click_prompt()
+            # If still no labels, abort
+            if self.labels is None or len(self.labels) == 0:
+                print("No labels defined. Aborting propagation.")
+                return
         self.video_segments = {}
         for out_frame_idx, out_obj_ids, out_mask_logits in self.predictor.propagate_in_video(self.state):
-                frame_path = os.path.join(self.frames_folder, self.frame_names[out_frame_idx])
+            frame_path = os.path.join(self.frames_folder, self.frame_names[out_frame_idx])
+            frame = cv2.imread(frame_path)
+            if frame is None:
+                continue
+            self.video_segments[out_frame_idx] = {
+                out_obj_id: (out_mask_logits[i] > 0.0).cpu().numpy()
+                for i, out_obj_id in enumerate(out_obj_ids)
+            }
+            if save:
+                pass
+            if visualize:
+                for obj_id, mask in self.video_segments[out_frame_idx].items():
+                    frame = self.show_mask_opencv(mask, frame, obj_id=obj_id, random_color=False, alpha=0.5)
+                cv2.imshow("Propagation", frame)
+                cv2.waitKey(1)
+
+    def propagate_in_chunks(self, chunk_size=400, save=True, visualize=False):
+        """
+        Propagate masks in consecutive chunks for long videos using a temp folder.
+        For subsequent chunks, extract last-frame masks and use K-means to select 5 well-distributed interior points as prompts.
+        """
+        import shutil
+        import tempfile
+        from sklearn.cluster import KMeans
+        n_frames = len(self.frame_names)
+        if n_frames == 0:
+            print("No frames found for propagation.")
+            return
+
+        self.video_segments = {}
+        chunks = []
+        for start in range(0, n_frames, chunk_size):
+            end = min(start + chunk_size, n_frames)
+            chunks.append((start, end))
+        num_chunks = len(chunks)
+
+        # For passing prompts between chunks
+        last_chunk_obj_ids = None
+        last_chunk_masks = None
+
+        for i, (start, end) in enumerate(chunks):
+            print(f"Processing chunk {i+1}/{num_chunks}: frames {start}-{end-1}")
+            chunk_frame_names = self.frame_names[start:end]
+            tmp_chunk_folder = os.path.join(self.frames_folder, "tmp_chunk")
+            if os.path.exists(tmp_chunk_folder):
+                shutil.rmtree(tmp_chunk_folder)
+            os.makedirs(tmp_chunk_folder, exist_ok=True)
+            for fname in chunk_frame_names:
+                src = os.path.join(self.frames_folder, fname)
+                dst = os.path.join(tmp_chunk_folder, fname)
+                try:
+                    shutil.copy2(src, dst)
+                except Exception as e:
+                    print(f"Error copying {src} to {dst}: {e}")
+            chunk_local_to_global = {idx: start + idx for idx in range(end - start)}
+
+            # ---- Initialize state on just this chunk ----
+            with torch.inference_mode():
+                self.state = self.predictor.init_state(tmp_chunk_folder)
+
+            # ---- Add prompts for first frame of chunk ----
+            if i == 0:
+                # First chunk: use user click prompts
+                if self.labels is None or len(self.labels) == 0:
+                    print("No prompts/labels found. Please add click prompt interactively.")
+                    self.add_click_prompt()
+                    if self.labels is None or len(self.labels) == 0:
+                        print("No labels defined. Aborting propagation.")
+                        try:
+                            shutil.rmtree(tmp_chunk_folder)
+                        except Exception as e:
+                            print(f"Warning: Could not remove temp chunk folder {tmp_chunk_folder}: {e}")
+                        return
+                # Add user click prompts to first frame of chunk (frame_idx=0 in chunk)
+                if hasattr(self, "points") and self.points is not None and hasattr(self, "labels") and self.labels is not None:
+                    for obj_id in sorted(self.object_id_to_label.keys()):
+                        coords = np.array(self.points, dtype=np.float32).reshape(-1, 2)
+                        lbls = np.array([1] * len(coords), dtype=np.int32)
+                        _, obj_ids, masks = self.predictor.add_new_points_or_box(
+                            inference_state=self.state, frame_idx=0, points=coords, labels=lbls, obj_id=obj_id
+                        )
+                else:
+                    print("Warning: No points found for click prompt. Skipping.")
+            else:
+                # For subsequent chunks, use last-frame's masks from previous chunk,
+                # For each object mask, use K-means to pick 5 well-distributed interior points
+                if last_chunk_obj_ids is None or last_chunk_masks is None:
+                    print("Error: No prompts from previous chunk to continue propagation. Aborting.")
+                    try:
+                        shutil.rmtree(tmp_chunk_folder)
+                    except Exception as e:
+                        print(f"Warning: Could not remove temp chunk folder {tmp_chunk_folder}: {e}")
+                    return
+                for idx, obj_id in enumerate(last_chunk_obj_ids):
+                    mask = last_chunk_masks[idx]
+                    mask_np = mask.cpu().numpy() if hasattr(mask, 'cpu') else mask
+                    # Squeeze mask to 2D if needed
+                    while mask_np.ndim > 2:
+                        mask_np = mask_np.squeeze(0)
+                    # Find all pixels where mask > 0.5
+                    ys, xs = np.where(mask_np > 0.5)
+                    coords = np.stack([xs, ys], axis=1) if len(xs) > 0 else np.zeros((0, 2), dtype=np.float32)
+                    if coords.shape[0] == 0:
+                        continue  # skip empty mask
+                    n_clusters = min(5, coords.shape[0])
+                    if n_clusters == 1:
+                        centroids = coords.astype(np.float32)
+                    else:
+                        # Use K-means to select up to 5 well-distributed points
+                        kmeans = KMeans(n_clusters=n_clusters, n_init=3, random_state=0)
+                        kmeans.fit(coords)
+                        centroids = kmeans.cluster_centers_.astype(np.float32)
+                    # Round centroids to float32 coordinates
+                    for pt in centroids:
+                        pt_xy = np.array([pt], dtype=np.float32)
+                        lbl = np.array([1], dtype=np.int32)
+                        # Pass these points as prompts to the first frame of the current chunk
+                        _, _, _ = self.predictor.add_new_points_or_box(
+                            inference_state=self.state, frame_idx=0, points=pt_xy, labels=lbl, obj_id=obj_id
+                        )
+
+            # ---- Propagate for this chunk ----
+            last_chunk_obj_ids = None
+            last_chunk_masks = None
+            for out_frame_idx, out_obj_ids, out_mask_logits in self.predictor.propagate_in_video(self.state):
+                global_frame_idx = chunk_local_to_global[out_frame_idx]
+                frame_path = os.path.join(self.frames_folder, self.frame_names[global_frame_idx]) 
                 frame = cv2.imread(frame_path)
                 if frame is None:
                     continue
-                
-                self.video_segments[out_frame_idx] = {
+                self.video_segments[global_frame_idx] = {
                     out_obj_id: (out_mask_logits[i] > 0.0).cpu().numpy()
                     for i, out_obj_id in enumerate(out_obj_ids)
                 }
-                if save: 
+                if save:
                     pass
-                    # if not os.path.exists(self.save_dir):
-                    #     os.makedirs(self.save_dir)
-                    # for obj_id, mask in self.video_segments[out_frame_idx].items():
-                    #     np.save(os.path.join(self.save_dir, f"mask_obj{obj_id}_{out_frame_idx:04d}.npy"), mask)
-                
                 if visualize:
-                    for obj_id, mask in self.video_segments[out_frame_idx].items():
+                    for obj_id, mask in self.video_segments[global_frame_idx].items():
                         frame = self.show_mask_opencv(mask, frame, obj_id=obj_id, random_color=False, alpha=0.5)
                     cv2.imshow("Propagation", frame)
                     cv2.waitKey(1)
+                # Save last frame's masks/obj_ids for next chunk
+                if out_frame_idx == (end - start - 1):
+                    last_chunk_obj_ids = out_obj_ids
+                    last_chunk_masks = out_mask_logits
+            try:
+                shutil.rmtree(tmp_chunk_folder)
+            except Exception as e:
+                print(f"Warning: Could not remove temp chunk folder {tmp_chunk_folder}: {e}")
 
     # visualize the masks on frames at a given stride 
     def visualize_masks(self, stride=30, bbox=True):
@@ -613,13 +755,14 @@ if __name__ == "__main__":
     frames_path = "/Users/itamrakar/Documents/Projects/fast_object_detection_dataset/data/sequence_000000/proc/flir/frame"
     runner = SAM2VideoRunner(frames_path)
     
-    runner.init_video()
+    # runner.init_video()
 
     # Point prompt with multiple points and multiple objects
-    runner.add_click_prompt()
+    # runner.add_click_prompt()
 
-    # Propagate
-    runner.propagate(save=True, visualize=True)
+    # Propagate in chunks (new method)
+    runner.propagate_in_chunks(chunk_size=10, save=True, visualize=True)
+    # runner.propagate(save=True, visualize=True)
     
     # Visualize masks on frames at a given stride
     # runner.visualize_masks(stride=1)
