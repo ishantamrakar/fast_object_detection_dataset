@@ -762,7 +762,7 @@ if __name__ == "__main__":
     # SAM2VideoRunner.convert_npy_to_jpg(npy_folder, jpg_folder)
 
     # frames_path = jpg_folder
-    frames_path = "/home/ishan/Documents/Action/fast_object_detection_dataset/data/sequence_000000/proc/flir/frame"
+    frames_path = "/home/ishan/Documents/Action/fast_object_detection_dataset/data/sequence_000001/proc/flir/frame"
     runner = SAM2VideoRunner(frames_path)
     
     # runner.init_video()
@@ -772,7 +772,7 @@ if __name__ == "__main__":
 
     # Propagate in chunks
     ### Increase chunk_size until you run out of GPU memory (for long videos)
-    runner.propagate_in_chunks(chunk_size=600, save=True, visualize=True)
+    # runner.propagate_in_chunks(chunk_size=500, save=True, visualize=True)
     # runner.propagate(save=True, visualize=True)
     
     # Visualize masks on frames at a given stride
@@ -786,8 +786,8 @@ if __name__ == "__main__":
     # runner.export_yolov8_dataset(train_ratio=0.8, write_data_yaml=True)
     
     # Collate multiple datasets
-    # base_dir = "/Users/itamrakar/Documents/Projects/fast_object_detection_dataset/data"
-    # target_dir = "/Users/itamrakar/Documents/Projects/fast_object_detection_dataset/collated_dataset"
-    # runner.collate_datasets(base_dir, target_dir, seed=42, keep_splits=True)
+    base_dir = "data"
+    target_dir = "data/collated_dataset"
+    runner.collate_datasets(base_dir, target_dir, seed=42, keep_splits=True)
     
     

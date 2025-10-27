@@ -1,0 +1,5 @@
+nc: 6
+path: data/collated_dataset
+train: images/train
+val: images/val
+names: ['no_action','bottle', 'champagne', 'espresso', 'spatula', 'pasta_server']

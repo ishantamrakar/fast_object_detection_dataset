@@ -15,7 +15,7 @@ def main():
     ])
     
     project_dir = "YOLOv11-Finetuned"
-    yaml_path = "/Users/itamrakar/Documents/Projects/fast_object_detection_dataset/collated_dataset/data.yaml"
+    yaml_path = "data/collated_dataset/data.yaml"
     os.environ["WANDB_DISABLED"] = "true"
     best_ckpt_path = f"{project_dir}/run1/weights/best.pt"
     if os.path.exists(best_ckpt_path):
@@ -23,7 +23,7 @@ def main():
         resume_flag = False   # start a NEW training from best.pt
         print("Continuing training from best checkpoint (new run).")
     else:
-        model = YOLO('yolov11s.pt')
+        model = YOLO('yolo11m.pt')
         resume_flag = False
         print("Starting training from scratch.")
 

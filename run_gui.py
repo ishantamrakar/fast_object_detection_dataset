@@ -3,28 +3,37 @@ from PyQt6.QtCore import Qt
 import sys
 
 # Predefined class mapping
+# CLASS_NAME_TO_INT = {
+#     "bottle": 1,
+#     "champagne": 2,
+#     "espresso": 3,
+#     "fork": 4,
+#     "hammer": 5,
+#     "knife_bread": 6,
+#     "knife_cleaver": 7,
+#     "knife_coreing": 8,
+#     "knife_paring": 9,
+#     "knife_steak": 10,
+#     "ladle": 11,
+#     "masher": 12,
+#     "mug": 13,
+#     "pliers": 14,
+#     "screwdriver": 15,
+#     "shot": 16,
+#     "spatula": 17,
+#     "spoon": 18,
+#     "whisk": 19,
+#     "wine": 20,
+#     "wrench": 21,
+#     "pasta_server": 22,
+# }
+
 CLASS_NAME_TO_INT = {
     "bottle": 1,
     "champagne": 2,
     "espresso": 3,
-    "fork": 4,
-    "hammer": 5,
-    "knife_bread": 6,
-    "knife_cleaver": 7,
-    "knife_coreing": 8,
-    "knife_paring": 9,
-    "knife_steak": 10,
-    "ladle": 11,
-    "masher": 12,
-    "mug": 13,
-    "pliers": 14,
-    "screwdriver": 15,
-    "shot": 16,
-    "spatula": 17,
-    "spoon": 18,
-    "whisk": 19,
-    "wine": 20,
-    "wrench": 21,
+    "spatula": 4,
+    "pasta_server": 5,
 }
 
 class LabelSelector(QWidget):
