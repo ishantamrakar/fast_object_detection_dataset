@@ -57,6 +57,6 @@ class YOLOVideoInspector:
 
         
 if __name__ == "__main__":
-    video_file = "data/sequence_000000/proc/flir/frame"
-    inspector = YOLOVideoInspector(model_path="checkpoints/yolo11m_375_test.pt", video_path=video_file)
+    video_file = "datasets/event_yolo_dataset/images/val"
+    inspector = YOLOVideoInspector(model_path="EYOLOv11m-Finetuned/run2/weights/best.pt", video_path=video_file)
     inspector.run()
