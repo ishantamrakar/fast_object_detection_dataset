@@ -29,12 +29,25 @@ import sys
 # }
 
 CLASS_NAME_TO_INT = {
-    "bottle": 1,
-    "champagne": 2,
-    "espresso": 3,
+    "knife_bread": 0,
+    "knife_cleaver": 1,
+    "knife_paring": 2,
+    "knife_steak": 3,
     "spatula": 4,
-    "pasta_server": 5,
+    "ladle": 5,
+    "spoon": 6,
+    "ice_cream_scoop": 7,
+    "pasta_server": 8,
+    "skimmer": 9,
+    "bottle": 10,
+    "champagne_glass": 11,
+    "espresso": 12,
+    "shot": 13,
+    "coffee_mug": 14,
+    "wine_glass": 15,
 }
+
+INT_TO_CLASS_NAME = {v: k for k, v in CLASS_NAME_TO_INT.items()}
 
 class LabelSelector(QWidget):
     def __init__(self):
