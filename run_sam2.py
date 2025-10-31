@@ -19,13 +19,16 @@ from run_gui import get_label
 class SAM2VideoRunner:
     def __init__(self, frames_folder, model_id="facebook/sam2-hiera-large", device="cpu"):
         self.frames_folder = frames_folder
+        self.model_id = model_id
+        self.device = device 
 
         self.seed = None
         number = ''.join(filter(str.isdigit, os.path.basename(frames_folder)))
+        if number == "":
+            number = ''.join(filter(str.isdigit, os.path.dirname(os.path.dirname((frames_folder)))))
 
-        
         self.save_dir = os.path.basename(frames_folder).split("_f")[0] + "_masks"
-        self.dataset_dir = os.path.join(os.path.dirname(frames_folder), "yolov8_dataset_" + number)
+        self.dataset_dir = os.path.join(os.path.dirname(frames_folder), "yolov11_dataset_" + number)
 
         if torch.backends.mps.is_available():
             self.device = torch.device("mps")
@@ -36,8 +39,6 @@ class SAM2VideoRunner:
         else:
             self.device = torch.device("cpu")
         print(f"using device: {self.device}")
-
-        # self.device = torch.device("cpu")
         
         if self.device.type == "cuda":
             # use bfloat16 for the entire notebook
@@ -51,7 +52,7 @@ class SAM2VideoRunner:
             print("Using MPS backend (no autocast or TF32).")
                 
         self.predictor = SAM2VideoPredictor.from_pretrained(
-            "facebook/sam2-hiera-small",
+            self.model_id,
             device=self.device
         )
         self.state = None
@@ -250,7 +251,6 @@ class SAM2VideoRunner:
         For subsequent chunks, extract last-frame masks and use K-means to select 5 well-distributed interior points as prompts.
         """
         import shutil
-        import tempfile
         from sklearn.cluster import KMeans
         n_frames = len(self.frame_names)
         if n_frames == 0:
@@ -268,7 +268,8 @@ class SAM2VideoRunner:
         last_chunk_obj_ids = None
         last_chunk_masks = None
 
-        for i, (start, end) in enumerate(chunks):
+        # add progress bar for chunks
+        for i, (start, end) in enumerate(tqdm(chunks, desc="Processing chunks")):
             print(f"Processing chunk {i+1}/{num_chunks}: frames {start}-{end-1}")
             chunk_frame_names = self.frame_names[start:end]
             tmp_chunk_folder = os.path.join(self.frames_folder, "tmp_chunk")
@@ -338,7 +339,7 @@ class SAM2VideoRunner:
                     coords = np.stack([xs, ys], axis=1) if len(xs) > 0 else np.zeros((0, 2), dtype=np.float32)
                     if coords.shape[0] == 0:
                         continue  # skip empty mask
-                    n_clusters = min(10, coords.shape[0])
+                    n_clusters = min(5, coords.shape[0])
                     if n_clusters == 1:
                         centroids = coords.astype(np.float32)
                     else:
@@ -447,7 +448,7 @@ class SAM2VideoRunner:
                 if not os.path.exists(self.save_dir):
                     os.makedirs(self.save_dir)
                 cv2.imwrite(os.path.join(self.save_dir, f"bbox_{out_frame_idx:04d}.jpg"), frame)
-                cv2.waitKey(100)
+                cv2.waitKey(10)
         cv2.destroyAllWindows()
         return boxes
 
@@ -762,8 +763,8 @@ if __name__ == "__main__":
     # SAM2VideoRunner.convert_npy_to_jpg(npy_folder, jpg_folder)
 
     # frames_path = jpg_folder
-    frames_path = "/home/ishan/Documents/Action/fast_object_detection_dataset/data/sequence_000001/proc/flir/frame"
-    runner = SAM2VideoRunner(frames_path)
+    frames_path = "data/procs/sequence_000001/proc/flir/frame"
+    runner = SAM2VideoRunner(frames_path, model_id="facebook/sam2-hiera-large")
     
     # runner.init_video()
 
@@ -772,22 +773,22 @@ if __name__ == "__main__":
 
     # Propagate in chunks
     ### Increase chunk_size until you run out of GPU memory (for long videos)
-    # runner.propagate_in_chunks(chunk_size=500, save=True, visualize=True)
+    runner.propagate_in_chunks(chunk_size=400, save=True, visualize=True)
     # runner.propagate(save=True, visualize=True)
     
     # Visualize masks on frames at a given stride
     # runner.visualize_masks(stride=1)
     
     # show bounding boxes
-    # boxes = runner.create_bounding_boxes(visualize=True)
+    boxes = runner.create_bounding_boxes(visualize=False)
     
     # Export to YOLOv8 format
-    # runner.seed = 42  
-    # runner.export_yolov8_dataset(train_ratio=0.8, write_data_yaml=True)
+    runner.seed = 42  
+    runner.export_yolov8_dataset(train_ratio=0.8, write_data_yaml=True)
     
     # Collate multiple datasets
-    base_dir = "data"
-    target_dir = "data/collated_dataset"
-    runner.collate_datasets(base_dir, target_dir, seed=42, keep_splits=True)
+    # base_dir = "data"
+    # target_dir = "data/collated_dataset"
+    # runner.collate_datasets(base_dir, target_dir, seed=42, keep_splits=True)
     
     
